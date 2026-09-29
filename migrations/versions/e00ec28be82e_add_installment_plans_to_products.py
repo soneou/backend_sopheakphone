@@ -18,14 +18,21 @@ depends_on = None
 
 def upgrade():
     # MySQL rejects a literal DEFAULT on JSON columns, so add it nullable,
-    # backfill, then tighten to NOT NULL.
-    with op.batch_alter_table('products', schema=None) as batch_op:
-        batch_op.add_column(sa.Column('installment_plans', sa.JSON(), nullable=True))
+    # backfill, then tighten to NOT NULL. MySQL DDL isn't transactional, so
+    # a retry after a partial failure may find the column already there —
+    # guard each step so re-running this migration is safe.
+    conn = op.get_bind()
+    inspector = sa.inspect(conn)
+    existing_columns = {col["name"] for col in inspector.get_columns("products")}
+
+    if "installment_plans" not in existing_columns:
+        with op.batch_alter_table('products', schema=None) as batch_op:
+            batch_op.add_column(sa.Column('installment_plans', sa.JSON(), nullable=True))
 
     op.execute("UPDATE products SET installment_plans = '[]' WHERE installment_plans IS NULL")
 
     with op.batch_alter_table('products', schema=None) as batch_op:
-        batch_op.alter_column('installment_plans', nullable=False)
+        batch_op.alter_column('installment_plans', existing_type=sa.JSON(), nullable=False)
 
 
 def downgrade():
